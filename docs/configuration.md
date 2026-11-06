@@ -1659,3 +1659,15 @@ update message. Web browsers control their own handoff and may show a second
 prompt; BB cannot reliably detect missing apps in a browser. Executable web
 schemes, local-file launch schemes, and reserved editor-action schemes remain
 blocked.
+
+## Pi extensions contributed by plugins
+
+`BB_PI_ADDITIONAL_EXTENSIONS` is an optional Pi provider per-command environment
+contribution through `bb.providers.experimental_contributeEnv("pi", ...)`, not
+an inherited daemon setting. Its value is a JSON array of absolute extension
+file paths staged by a trusted plugin on the exact host. Missing/empty arrays
+remove these extensions at the next safe turn/session construction, preserving
+provider identity. It does not affect catalog/model listing or fork utilities.
+Invalid/unreadable paths are omitted with stderr diagnostics; readable extension
+code retains normal Pi startup failure behavior. Existing first-plugin-wins
+resolution applies. See `plugins/provider-pi/README.md` for limits and lifecycle.

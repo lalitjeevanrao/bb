@@ -102,3 +102,32 @@ The recorded-conformance replay of bb's committed pi recordings
 (`packages/provider-bridge-protocol/recordings/pi`) runs in
 `@bb/provider-parity` (`pi-recorded-conformance.test.ts`), because the
 recordings live outside the plugin.
+
+### Optional extensions from trusted plugins
+
+A plugin may contribute `BB_PI_ADDITIONAL_EXTENSIONS` through
+`bb.providers.experimental_contributeEnv("pi", ...)`: a JSON array of absolute
+extension file paths on the session's host. Stage the files with the plugin's
+host RPC before returning the contribution. This is a per-command setting;
+the Pi bridge does not read it from its own inherited environment. Existing
+first-plugin-wins environment conflict resolution applies to this single key.
+
+The bridge accepts at most 32 entries, 4096 characters per path, and 65536
+characters of JSON. It canonicalizes and deduplicates readable regular files.
+Invalid lists or entries are omitted with stderr diagnostics; other valid
+entries continue. Each accepted path is passed as its own `--extension`
+argument after BB's built-in extension. Catalog/model listing and fork utility
+processes receive only BB's built-in extension.
+
+Initial start/resume and each subsequent turn use the current command snapshot.
+Missing values and `[]` both clear optional extensions. Changes reconstruct the
+Pi session at the existing safe turn boundary, preserving session identity and
+checkpoints; steering an active turn does not reload extensions. Disable/remove
+therefore takes effect at the next start/resume or safe turn, not immediately.
+Keep staged files available for the lifetime of sessions using them.
+
+These are trusted executable extensions, with normal Pi `--extension` behavior.
+Path validation cannot catch module syntax or initialization errors: readable
+code that fails to load can still prevent Pi startup. No inference or startup
+retry is added for this feature. A contributor must handle its own optional
+initialization failures and report capture availability honestly.

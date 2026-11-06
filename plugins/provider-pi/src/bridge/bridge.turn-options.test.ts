@@ -1,13 +1,17 @@
-import { readFileSync } from "node:fs";
+import { ChildProcess } from "node:child_process";
+import { channel } from "node:diagnostics_channel";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { PiRpcSession } from "./rpc-session.js";
 import type {
   BridgeJsonRpcObject,
   BridgeJsonRpcOutputMessage,
 } from "@get-bb/plugin-sdk/provider-bridge/testing";
 import {
   FULL_PERMISSION_OPTIONS,
+  fakePiPath,
   type FakePiBridgeHarness,
   startFakePiBridge,
 } from "./test-support.js";
@@ -69,7 +73,8 @@ function providerThreadIdFor(threadId: string): string {
   const providerThreadId = (identity?.params as { providerThreadId?: unknown })
     .providerThreadId;
   expect(typeof providerThreadId).toBe("string");
-  if (typeof providerThreadId !== "string") throw new Error("missing provider thread identity");
+  if (typeof providerThreadId !== "string")
+    throw new Error("missing provider thread identity");
   return providerThreadId;
 }
 
@@ -123,7 +128,9 @@ it(
     const threadId = "thr_turn_options_model";
     const start = await harness.startThread(threadId, { options: MINI });
     const originalProviderThreadId = providerThreadIdFor(threadId);
-    expect(start.result).toMatchObject({ providerThreadId: originalProviderThreadId });
+    expect(start.result).toMatchObject({
+      providerThreadId: originalProviderThreadId,
+    });
 
     expect((await turnStart(1, threadId, "first", MINI)).error).toBeUndefined();
     let seen = await harness.waitForTurnBoundary(threadId, 0);
@@ -290,9 +297,17 @@ it(
   "steers the running turn without rebuilding on its options",
   async () => {
     const threadId = "thr_turn_options_steer";
-    await harness.startThread(threadId, { options: MINI });
+    const extension = join(harness.workspaceDir, "steer-extension.mjs");
+    writeFileSync(extension, "export default () => {};\n");
+    const initial = {
+      ...MINI,
+      envVars: { BB_PI_ADDITIONAL_EXTENSIONS: JSON.stringify([extension]) },
+    };
+    await harness.startThread(threadId, { options: initial });
 
-    expect((await turnStart(1, threadId, "/hold", MINI)).error).toBeUndefined();
+    expect(
+      (await turnStart(1, threadId, "/hold", initial)).error,
+    ).toBeUndefined();
     await harness.waitForDelta(threadId, (delta) => delta.kind === "turn.open");
 
     const steer = await harness.request(2, "turn/steer", {
@@ -305,6 +320,151 @@ it(
     });
     expect(steer.result).toMatchObject({ threadId });
     expect(sessionReplacements(threadId)).toEqual([]);
+  },
+  TURN_OPTIONS_TEST_TIMEOUT_MS,
+);
+
+it.each(["[]", "empty", "omitted"])(
+  "reconciles optional extension updates and removal through %s without changing identity",
+  async (removal) => {
+    const children: ChildProcess[] = [];
+    const onSpawn = (message: unknown) => {
+      if (
+        typeof message === "object" &&
+        message !== null &&
+        "process" in message &&
+        message.process instanceof ChildProcess
+      ) {
+        children.push(message.process);
+      }
+    };
+    const childChannel = channel("child_process");
+    childChannel.subscribe(onSpawn);
+    const first = join(
+      realpathSync(harness.workspaceDir),
+      "first extension.mjs",
+    );
+    const second = join(realpathSync(harness.workspaceDir), "second.mjs");
+    writeFileSync(first, "export default () => {};\n");
+    writeFileSync(second, "export default () => {};\n");
+    const options = (path: string) => ({
+      ...MINI,
+      envVars: { BB_PI_ADDITIONAL_EXTENSIONS: JSON.stringify([path]) },
+    });
+    const extensions = (args: string[]) =>
+      args.flatMap((arg, index) =>
+        arg === "--extension" ? [args[index + 1]] : [],
+      );
+    try {
+      vi.stubEnv("BB_PI_ADDITIONAL_EXTENSIONS", JSON.stringify([first]));
+      const threadId = "thr_turn_extensions";
+      await harness.startThread(threadId, { options: options(first) });
+      const identity = providerThreadIdFor(threadId);
+      const sessionFile = join(harness.sessionDir, `${identity}.jsonl`);
+      const checkpoint = readFileSync(sessionFile, "utf8");
+      expect(
+        (await turnStart(1, threadId, "first", options(first))).error,
+      ).toBeUndefined();
+      let seen = await harness.waitForTurnBoundary(threadId, 0);
+      expect(sessionReplacements(threadId)).toHaveLength(0);
+      expect(
+        (await turnStart(2, threadId, "second", options(second))).error,
+      ).toBeUndefined();
+      seen = await harness.waitForTurnBoundary(threadId, seen);
+      const removalEnv: Record<string, string> =
+        removal === "empty" ? {} : { BB_PI_ADDITIONAL_EXTENSIONS: "[]" };
+      const removed =
+        removal === "omitted" ? MINI : { ...MINI, envVars: removalEnv };
+      expect(
+        (await turnStart(3, threadId, "removed", removed)).error,
+      ).toBeUndefined();
+      seen = await harness.waitForTurnBoundary(threadId, seen);
+      expect(
+        (await turnStart(4, threadId, "still removed", removed)).error,
+      ).toBeUndefined();
+      await harness.waitForTurnBoundary(threadId, seen);
+      const launches = children
+        .filter((child) => child.spawnargs.includes(fakePiPath))
+        .map((child) => child.spawnargs);
+      const sessions = launches.filter((args) => args.includes("--session"));
+      expect(sessions).toHaveLength(3);
+      const builtin = extensions(sessions[0]!)[0];
+      expect(builtin).toMatch(/bb-pi-extension\.mjs$/);
+      expect(sessions.map(extensions)).toEqual([
+        [builtin, first],
+        [builtin, second],
+        [builtin],
+      ]);
+      expect(
+        launches
+          .filter((args) => args.includes("--no-session"))
+          .every((args) => extensions(args).length === 1),
+      ).toBe(true);
+      expect(providerThreadIdFor(threadId)).toBe(identity);
+      expect(readFileSync(sessionFile, "utf8")).toBe(checkpoint);
+      expect(sessionReplacements(threadId)).toHaveLength(2);
+      expect(
+        sessionReplacements(threadId).every((value) => !value.contextLost),
+      ).toBe(true);
+      if (removal === "[]") {
+        const utilitiesBefore = children.filter(
+          (child) =>
+            child.spawnargs.includes(fakePiPath) &&
+            child.spawnargs.includes("--no-session"),
+        ).length;
+        const fork = await harness.request(900, "thread/fork", {
+          threadId: "thr_extensions_fork",
+          cwd: harness.workspaceDir,
+          sourceProviderThreadId: identity,
+          options: options(first),
+          instructionMode: "append",
+        });
+        expect(fork.error).toBeUndefined();
+        const utilities = children.filter(
+          (child) =>
+            child.spawnargs.includes(fakePiPath) &&
+            child.spawnargs.includes("--no-session"),
+        );
+        expect(utilities.length).toBeGreaterThan(utilitiesBefore);
+        expect(
+          utilities.every((child) => extensions(child.spawnargs).length === 1),
+        ).toBe(true);
+      }
+    } finally {
+      childChannel.unsubscribe(onSpawn);
+      vi.unstubAllEnvs();
+    }
+  },
+  TURN_OPTIONS_TEST_TIMEOUT_MS,
+);
+
+it.each(["not JSON", "{}", '["relative.mjs", "/missing/extension.mjs"]'])(
+  "starts once and serves a turn when optional entries are invalid: %s",
+  async (value) => {
+    const start = vi.spyOn(PiRpcSession.prototype, "start");
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const options = {
+        ...MINI,
+        envVars: { BB_PI_ADDITIONAL_EXTENSIONS: value },
+      };
+      const threadId = "thr_optional_invalid";
+      expect(
+        (await harness.startThread(threadId, { options })).error,
+      ).toBeUndefined();
+      expect(
+        (await turnStart(1, threadId, "hello", options)).error,
+      ).toBeUndefined();
+      await harness.waitForTurnBoundary(threadId, 0);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("BB_PI_ADDITIONAL_EXTENSIONS"),
+      );
+      expect(sessionReplacements(threadId)).toHaveLength(0);
+    } finally {
+      start.mockRestore();
+      stderr.mockRestore();
+    }
   },
   TURN_OPTIONS_TEST_TIMEOUT_MS,
 );

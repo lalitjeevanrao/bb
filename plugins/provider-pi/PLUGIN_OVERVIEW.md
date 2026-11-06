@@ -16,3 +16,10 @@ The plugin starts `pi` in RPC mode on the host and loads a small bb extension in
 - Install the Pi coding agent on the host machine: `npm install -g @earendil-works/pi-coding-agent`. Version 0.84.0 or newer is required.
 - Sign in with `pi` on that machine.
 - Optional: set `BB_PI_BRIDGE_COMMAND` and `BB_PI_BRIDGE_ARGS` on the host to use a Pi executable that is not on `PATH`.
+
+- Trusted plugins may contribute the per-command `BB_PI_ADDITIONAL_EXTENSIONS`
+  JSON path array after staging readable extension files on the session host.
+  The bridge validates and appends them after its built-in extension, and
+  reconciles changes/removal at the next safe turn. No global Pi install,
+  catalog/fork utility loading, or inference retry is added. See README bounds,
+  trusted-code startup limits, and lifecycle.

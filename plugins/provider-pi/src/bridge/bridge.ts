@@ -12,7 +12,6 @@ import {
   PROVIDER_BRIDGE_PROTOCOL_VERSION,
   THREAD_DELTA_GRAMMAR_V3,
   THREAD_DELTA_NOTIFICATION_METHOD,
-  buildShellEnvOverrides,
   bridgeRequestEnvelopeSchema,
   createBridgeIo,
   createBridgeLineHandler,
@@ -40,9 +39,14 @@ import {
   type ThreadEventContextWindowUsage,
 } from "@get-bb/plugin-sdk/provider-bridge";
 import type { ImageContent } from "@earendil-works/pi-ai";
+import {
+  PI_ADDITIONAL_EXTENSIONS_ENV,
+  resolveAdditionalExtensionPaths,
+} from "../additional-extensions.js";
 import { createPiDeltaTranslator } from "../delta-translation.js";
 import {
   buildPiSessionParams,
+  buildPiShellEnvOverrides,
   buildPiTurnOptions,
   type PiSessionParams,
 } from "../session-params.js";
@@ -722,6 +726,7 @@ async function buildSessionOptions(args: {
     systemPrompt: args.params.baseInstructions,
     appendSystemPrompt: args.params.appendSystemPrompt,
     shellEnvOverrides: args.params.shellEnvOverrides,
+    additionalExtensionPaths: args.params.additionalExtensionPaths,
     ...(args.params.additionalSkillPaths
       ? { additionalSkillPaths: [...args.params.additionalSkillPaths] }
       : {}),
@@ -997,9 +1002,16 @@ async function reconcileTurnOptions(
 ): Promise<ThreadSession> {
   const turnOptions = buildPiTurnOptions(options);
   const construction = threadSession.construction;
+  const additionalExtensionPaths = resolveAdditionalExtensionPaths(
+    options.envVars?.[PI_ADDITIONAL_EXTENSIONS_ENV],
+  );
+  const extensionsChanged = !isDeepStrictEqual(
+    additionalExtensionPaths,
+    construction.additionalExtensionPaths,
+  );
   const shellEnvOverrides =
     options.envVars && Object.keys(options.envVars).length > 0
-      ? { BB_THREAD_ID: threadId, ...buildShellEnvOverrides(options.envVars) }
+      ? buildPiShellEnvOverrides(threadId, options.envVars)
       : undefined;
   const environmentChanged =
     shellEnvOverrides !== undefined &&
@@ -1012,6 +1024,7 @@ async function reconcileTurnOptions(
     turnOptions.thinkingLevel !== undefined &&
     turnOptions.thinkingLevel !== construction.thinkingLevel;
   if (
+    !extensionsChanged &&
     !environmentChanged &&
     changedModelRequest === undefined &&
     !thinkingLevelChanged
@@ -1027,11 +1040,17 @@ async function reconcileTurnOptions(
     (threadSession.constructionModel === undefined ||
       threadSession.constructionModel.provider !== nextModel.provider ||
       threadSession.constructionModel.id !== nextModel.id);
-  if (!environmentChanged && !modelChanged && !thinkingLevelChanged) {
+  if (
+    !extensionsChanged &&
+    !environmentChanged &&
+    !modelChanged &&
+    !thinkingLevelChanged
+  ) {
     return threadSession;
   }
   const replacement = await rebuildThreadSession(threadId, threadSession, {
     ...construction,
+    additionalExtensionPaths,
     ...(shellEnvOverrides === undefined ? {} : { shellEnvOverrides }),
     ...(turnOptions.model === undefined ? {} : { model: turnOptions.model }),
     ...(turnOptions.thinkingLevel === undefined

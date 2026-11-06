@@ -1,4 +1,8 @@
 import {
+  PI_ADDITIONAL_EXTENSIONS_ENV,
+  resolveAdditionalExtensionPaths,
+} from "./additional-extensions.js";
+import {
   buildShellEnvOverrides,
   type DynamicTool,
   type InstructionMode,
@@ -41,6 +45,7 @@ interface BuildPiSessionParamsArgs {
 }
 
 export interface PiSessionParams {
+  additionalExtensionPaths: readonly string[];
   additionalSkillPaths?: readonly string[];
   appendSystemPrompt?: string;
   baseInstructions?: string;
@@ -63,6 +68,18 @@ export function buildPiTurnOptions(options: PiSessionOptions): PiTurnOptions {
   };
 }
 
+export function buildPiShellEnvOverrides(
+  threadId: string,
+  envVars: Record<string, string> | undefined,
+): Record<string, string> {
+  const overrides: Record<string, string> = {
+    BB_THREAD_ID: threadId,
+    ...buildShellEnvOverrides(envVars),
+  };
+  delete overrides[PI_ADDITIONAL_EXTENSIONS_ENV];
+  return overrides;
+}
+
 export function buildPiSessionParams(
   args: BuildPiSessionParamsArgs,
 ): PiSessionParams {
@@ -70,10 +87,13 @@ export function buildPiSessionParams(
   const thinkingLevel = toPiThinkingLevel(args.options.reasoningLevel);
   return {
     cwd: args.cwd,
-    shellEnvOverrides: {
-      BB_THREAD_ID: args.threadId,
-      ...buildShellEnvOverrides(args.options.envVars),
-    },
+    additionalExtensionPaths: resolveAdditionalExtensionPaths(
+      args.options.envVars?.[PI_ADDITIONAL_EXTENSIONS_ENV],
+    ),
+    shellEnvOverrides: buildPiShellEnvOverrides(
+      args.threadId,
+      args.options.envVars,
+    ),
     ...(instructions
       ? args.instructionMode === "replace"
         ? { baseInstructions: instructions }

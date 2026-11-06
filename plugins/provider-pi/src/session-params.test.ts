@@ -71,3 +71,19 @@ describe("buildPiSessionParams", () => {
     expect(withMode("replace")).not.toHaveProperty("appendSystemPrompt");
   });
 });
+
+it("keeps the extension launch setting out of the child environment", () => {
+  const params = buildPiSessionParams({
+    threadId: "thread",
+    cwd: "/tmp",
+    instructionMode: "append",
+    options: {
+      envVars: { BB_PI_ADDITIONAL_EXTENSIONS: "[]", OTHER: "retained" },
+    },
+  });
+  expect(params.additionalExtensionPaths).toEqual([]);
+  expect(params.shellEnvOverrides).toEqual({
+    BB_THREAD_ID: "thread",
+    OTHER: "retained",
+  });
+});
