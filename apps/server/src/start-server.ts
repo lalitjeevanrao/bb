@@ -82,6 +82,7 @@ import {
 } from "./services/server-move/pending-boot.js";
 import { createConnectHold } from "./services/server-move/connect-hold.js";
 import { isServerMoveFrozen } from "./services/server-move/freeze-state.js";
+import { startThreadPurging } from "./services/threads/thread-purge.js";
 import { reconcileServerMoveRunAtBoot } from "./services/server-move/reconcile.js";
 import {
   retireServerProcess as retireProcessWithDeadline,
@@ -521,7 +522,11 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
     baseUrl: `http://127.0.0.1:${serverConfig.BB_SERVER_PORT}`,
   });
   let sweepInterval: ReturnType<typeof setInterval> | null = null;
+  let threadPurging: ReturnType<typeof startThreadPurging> | null = null;
   if (pendingServerMove === null) {
+    threadPurging = startThreadPurging(sweepDeps, {
+      isFrozen: () => isServerMoveFrozen(db),
+    });
     telemetry.capture({ name: "app_started" });
     if (serverMoveRun?.kind === "completed") {
       logger.info(
@@ -570,6 +575,7 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
       if (sweepInterval !== null) {
         clearInterval(sweepInterval);
       }
+      threadPurging?.stop();
       pluginCatalogService.stopPeriodicRefresh();
       await pluginService.stopPeriodicUpdateChecks();
       if (pendingServerMove === null) {

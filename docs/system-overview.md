@@ -40,7 +40,11 @@ source, and every workflow worker attempt by its origin.
   dependents, following both relationships at every level, including hidden and
   archived threads. Fork sources alone do not imply deletion. The owner row
   remains until every lifecycle dependent finishes storage cleanup on its own
-  host; failures are retried.
+  host; failures are retried. Once its cleanup is done, a deleted thread is
+  queued in `thread_purges` and a background job removes its rows from `bb.db`
+  in small batches: 10 ms slices, resting nine times as long while a client is
+  connected or a thread is running. The thread stays hidden throughout, and a
+  restart resumes the queue.
 - Dependents can be archived or deleted independently of their owner. Deleting
   an owning project also deletes cross-project dependents; deleting only a
   dependent's project leaves its external owner intact.

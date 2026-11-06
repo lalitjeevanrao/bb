@@ -13,7 +13,7 @@ import {
   runThreadStorageOrphanSweep,
   THREAD_STORAGE_ORPHAN_SWEEP_CADENCE_MS,
 } from "../threads/thread-storage-orphans.js";
-import { and, eq, isNull, isNotNull, inArray } from "drizzle-orm";
+import { and, eq, isNull, isNotNull, inArray, notExists } from "drizzle-orm";
 import { sweepMachineLifecycles } from "../machines/provider-orchestration.js";
 import {
   CLOSED_SESSION_ROW_RETENTION_MS,
@@ -38,6 +38,7 @@ import {
   RETAINED_EVENT_OUTPUT_TARGETS,
   runIncrementalVacuum,
   shouldRunIncrementalVacuum,
+  threadPurges,
   threads,
   DEFAULT_COMPLETED_EVENT_OUTPUT_MIGRATION_SCAN_LIMIT,
   DEFAULT_LEGACY_IMAGE_GENERATION_MIGRATION_SCAN_LIMIT,
@@ -401,7 +402,17 @@ async function runThreadProvisioningOrphanCleanupSweep(
       storageDeletedAt: threads.storageDeletedAt,
     })
     .from(threads)
-    .where(isNotNull(threads.deletedAt))
+    .where(
+      and(
+        isNotNull(threads.deletedAt),
+        notExists(
+          deps.db
+            .select({ threadId: threadPurges.threadId })
+            .from(threadPurges)
+            .where(eq(threadPurges.threadId, threads.id)),
+        ),
+      ),
+    )
     .all();
   for (const thread of deletedThreads) {
     deps.terminalSessions.closeDeletedThreadTerminals({ threadId: thread.id });

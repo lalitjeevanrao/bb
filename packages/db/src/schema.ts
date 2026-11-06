@@ -719,6 +719,17 @@ export const threadTabs = sqliteTable("thread_tabs", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+export const threadPurges = sqliteTable(
+  "thread_purges",
+  {
+    threadId: text("thread_id")
+      .primaryKey()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    requestedAt: integer("requested_at").notNull(),
+  },
+  (table) => [index("thread_purges_requested_idx").on(table.requestedAt)],
+);
+
 export const threadSections = sqliteTable(
   "thread_sections",
   {
